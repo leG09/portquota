@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import os, sys, time, subprocess, json, argparse, re, datetime
 try:
     import tomllib  # py3.11+
