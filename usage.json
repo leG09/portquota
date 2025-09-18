@@ -1,0 +1,41 @@
+{
+  "timestamp": "2025-09-18T02:30:14+00:00",
+  "unit": "GB",
+  "ports": {
+    "52135": {
+      "bytes": 1119251246,
+      "used_gb": 1.1193,
+      "limit_gb": 1.0,
+      "direction": "both",
+      "status": "blocked"
+    },
+    "51235": {
+      "bytes": 35456782,
+      "used_gb": 0.0355,
+      "limit_gb": 50.0,
+      "direction": "both",
+      "status": "open"
+    },
+    "51236": {
+      "bytes": 2693392642,
+      "used_gb": 2.6934,
+      "limit_gb": 50.0,
+      "direction": "both",
+      "status": "open"
+    },
+    "51237": {
+      "bytes": 15112071626,
+      "used_gb": 15.1121,
+      "limit_gb": 50.0,
+      "direction": "both",
+      "status": "open"
+    },
+    "51238": {
+      "bytes": 51580,
+      "used_gb": 0.0001,
+      "limit_gb": 50.0,
+      "direction": "both",
+      "status": "open"
+    }
+  }
+}

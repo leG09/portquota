@@ -1,0 +1,21 @@
+[Unit]
+Description=Per-port traffic quota enforcer (nftables + UFW)
+After=network-online.target nftables.service
+Wants=network-online.target nftables.service
+
+[Service]
+Type=simple
+# 设定工作目录，便于相对路径（但我们仍然用绝对路径更稳妥）
+WorkingDirectory=/root/portquota
+# 明确 PATH，避免找不到 nft / ufw
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 用 python3 直接跑你的脚本，并指定你的配置
+ExecStart=/usr/bin/python3 /root/portquota/portquota.py --config /root/portquota/config.toml --daemon
+Restart=always
+RestartSec=2
+User=root
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+

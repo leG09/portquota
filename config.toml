@@ -1,0 +1,47 @@
+[general]
+# 统计与落盘
+interval_sec = 5
+usage_file   = "/root/portquota/usage.json"
+
+# 接口排除：不统计 lo、docker0；如需统计本机回环，把 "lo" 删掉
+exclude_ifaces = ["lo","docker0"]
+
+# 单位：GB(10^9) 或 GiB(2^30)
+unit = "GB"
+
+# 统计协议（封禁时按需求只封 tcp）
+protocols = ["tcp","udp"]
+
+# === 被限额的端口 ===
+# direction = "both"（默认，入+出总量）| "ingress"（仅入）| "egress"（仅出）
+
+[[ports]]
+port = 52135
+limit_gb = 1
+direction = "both"
+
+[[ports]]
+port = 51235
+limit_gb = 50
+direction = "both"
+
+[[ports]]
+port = 51236
+limit_gb = 50
+direction = "both"
+
+[[ports]]
+port = 51237
+limit_gb = 50
+direction = "both"
+
+[[ports]]
+port = 51238
+limit_gb = 50
+direction = "both"
+
+# 再加更多端口：
+# [[ports]]
+# port = 51235
+# limit_gb = 10
+# direction = "ingress"
