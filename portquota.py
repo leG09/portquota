@@ -368,7 +368,10 @@ def run_tui(config_path: str):
         stdscr.addnstr(2, 0, header, w-1, curses.A_BOLD | curses.color_pair(1))
         stdscr.hline(3, 0, ord('='), w-1)
         start_line = 4
-        for idx, r in enumerate(rows):
+        # 预留底部 3 行：消息行、watch 行、输入提示行
+        max_rows_area = max(0, h - start_line - 3 - 1)  # 额外减1给分隔线
+        visible = rows[:max_rows_area]
+        for idx, r in enumerate(visible):
             selected = (idx == state["selected"]) 
             prefix = ">" if selected else " "
             line = f"{prefix} {r['port']:<7} {r['used']:<10.4f} {r['limit']:<10.4f} {r['direction']:<9} "
@@ -380,17 +383,40 @@ def run_tui(config_path: str):
             if selected:
                 attr |= curses.A_REVERSE
             stdscr.addnstr(start_line + idx, 0, line + r['status'], w-1, attr)
-        stdscr.hline(start_line + len(rows), 0, ord('-'), w-1)
-        if state["message"]:
-            stdscr.addnstr(start_line + len(rows) + 1, 0, state["message"], w-1, curses.color_pair(4))
-        if state["watch"]:
-            stdscr.addnstr(start_line + len(rows) + 2, 0, "[WATCH 模式：自动刷新中]", w-1, curses.color_pair(1))
+        # 若有截断，显示提示
+        if len(rows) > len(visible):
+            more = len(rows) - len(visible)
+            stdscr.addnstr(start_line + len(visible), 0, f"... 还有 {more} 行未显示，增大终端高度以查看更多", w-1, curses.color_pair(4))
+
+        footer_sep_y = h - 4
+        if footer_sep_y >= 0:
+            stdscr.hline(footer_sep_y, 0, ord('-'), w-1)
+
+        msg_y = h - 3
+        watch_y = h - 2
+        if msg_y >= 0 and state["message"]:
+            # 清理消息与 watch 行
+            try:
+                stdscr.addnstr(msg_y, 0, " " * (w-1), w-1)
+                stdscr.addnstr(msg_y, 0, state["message"], w-1, curses.color_pair(4))
+            except Exception:
+                pass
+        if watch_y >= 0 and state["watch"]:
+            try:
+                stdscr.addnstr(watch_y, 0, " " * (w-1), w-1)
+                stdscr.addnstr(watch_y, 0, "[WATCH 模式：自动刷新中]", w-1, curses.color_pair(1))
+            except Exception:
+                pass
         stdscr.refresh()
 
     def prompt(stdscr, msg) -> str:
         curses.echo()
         h, w = stdscr.getmaxyx()
-        stdscr.addnstr(h-1, 0, " " * (w-1), w-1)
+        # 清理底部两行（消息/提示行）
+        if h-1 >= 0:
+            stdscr.addnstr(h-1, 0, " " * (w-1), w-1)
+        if h-2 >= 0:
+            stdscr.addnstr(h-2, 0, " " * (w-1), w-1)
         stdscr.addnstr(h-1, 0, msg, w-1)
         stdscr.refresh()
         s = stdscr.getstr(h-1, len(msg)).decode(errors='ignore')
