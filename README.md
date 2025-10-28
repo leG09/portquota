@@ -26,14 +26,14 @@
 
 **使用 curl:**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/refs/heads/main/install.sh)" -- --yes
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/leG09/portquota/refs/heads/main/install.sh)" -- --yes
 ```
 
 安装成功后，卸载脚本位于 `/root/portquota/uninstall.sh`。
 
 **卸载**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/refs/heads/main/uninstall.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/leG09/portquota/refs/heads/main/uninstall.sh)"
 ```
 
 ### 非交互安装参数
@@ -43,7 +43,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/re
 install.sh --non-interactive
 
 # 指定自定义仓库/分支与安装目录
-install.sh --repo https://github.com/tsingfenger/portquota.git --branch main \
+install.sh --repo https://github.com/leG09/portquota.git --branch main \
            --install-dir /root/portquota --bin-dir /usr/local/bin
 
 # 跳过 UFW 首次配置（保留现有 UFW 策略）
