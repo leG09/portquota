@@ -593,32 +593,9 @@ def main():
 
     cfg = load_config(args.config)
 
-    if args.cmd == "reset":
-        port = int(args.port)
-        reset_counter(f"port{port}_total")
-        ensure_port_allowed_tcp(port)
-        print(f"[reset] port {port}: counter cleared and ufw allowed.")
-        return
+    # 兼容遗留代码：不再支持 reset/status 子命令
 
-    if args.cmd == "status":
-        g = cfg.get("general",{})
-        unit = (g.get("unit","GB")).upper()
-        unit_size = 1_000_000_000 if unit=="GB" else 1_073_741_824
-        ensure_infra()
-        rows=[]
-        for p in cfg.get("ports",[]):
-            port=int(p["port"]); lim=float(p["limit_gb"])
-            direction=p.get("direction","both")
-            cname=f"port{port}_total"
-            ensure_counter(cname)
-            b=nft_counter_bytes(cname); status = "blocked" if b>=lim*unit_size else "open"
-            if args.json:
-                rows.append({"port":port, f"used_{unit.lower()}":round(b/unit_size,4), f"limit_{unit.lower()}":lim, "direction":direction, "status":status})
-            else:
-                print(f"{port}: {b/unit_size:.4f}/{lim} {unit} [{direction}]  -> {status}")
-        if args.json:
-            print(json.dumps({"unit":unit,"ports":rows},ensure_ascii=False,indent=2))
-        return
+    # 兼容遗留代码：不再支持 reset/status 子命令
 
     if args.daemon:
         loop(cfg)
