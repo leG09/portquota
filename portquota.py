@@ -329,7 +329,8 @@ def run_tui(config_path: str):
     unit_size = 1_000_000_000 if unit=="GB" else 1_073_741_824
 
     state = {
-        "selected": 0,
+        "selected": 0,   # 选中项的全局索引
+        "top": 0,        # 可视区域的起始索引（滚动）
         "message": "",
         "last_refresh": None,
         "watch": False,
@@ -370,9 +371,17 @@ def run_tui(config_path: str):
         start_line = 4
         # 预留底部 3 行：消息行、watch 行、输入提示行
         max_rows_area = max(0, h - start_line - 3 - 1)  # 额外减1给分隔线
-        visible = rows[:max_rows_area]
+        # 滚动窗口计算
+        total = len(rows)
+        if state["selected"] < state["top"]:
+            state["top"] = state["selected"]
+        if state["selected"] >= state["top"] + max_rows_area:
+            state["top"] = max(0, state["selected"] - max_rows_area + 1)
+        visible = rows[state["top"]: state["top"] + max_rows_area]
+
         for idx, r in enumerate(visible):
-            selected = (idx == state["selected"]) 
+            global_idx = state["top"] + idx
+            selected = (global_idx == state["selected"]) 
             prefix = ">" if selected else " "
             line = f"{prefix} {r['port']:<7} {r['used']:<10.4f} {r['limit']:<10.4f} {r['direction']:<9} "
             attr = curses.A_NORMAL
@@ -384,8 +393,8 @@ def run_tui(config_path: str):
                 attr |= curses.A_REVERSE
             stdscr.addnstr(start_line + idx, 0, line + r['status'], w-1, attr)
         # 若有截断，显示提示
-        if len(rows) > len(visible):
-            more = len(rows) - len(visible)
+        if total > len(visible):
+            more = total - len(visible)
             stdscr.addnstr(start_line + len(visible), 0, f"... 还有 {more} 行未显示，增大终端高度以查看更多", w-1, curses.color_pair(4))
 
         footer_sep_y = h - 4
@@ -410,17 +419,37 @@ def run_tui(config_path: str):
         stdscr.refresh()
 
     def prompt(stdscr, msg) -> str:
+        # 暂停自动刷新，进入输入模式
+        prev_timeout = stdscr.gettimeout()
+        stdscr.timeout(-1)
         curses.echo()
+        curses.curs_set(1)
         h, w = stdscr.getmaxyx()
         # 清理底部两行（消息/提示行）
         if h-1 >= 0:
             stdscr.addnstr(h-1, 0, " " * (w-1), w-1)
         if h-2 >= 0:
             stdscr.addnstr(h-2, 0, " " * (w-1), w-1)
-        stdscr.addnstr(h-1, 0, msg, w-1)
-        stdscr.refresh()
-        s = stdscr.getstr(h-1, len(msg)).decode(errors='ignore')
-        curses.noecho()
+        # 限制提示文本不超过宽度
+        prompt_text = msg[: max(0, w-2)]
+        start_col = min(len(prompt_text), max(0, w-2))
+        # 使用单独的输入窗口，避免与主窗口属性冲突
+        try:
+            win = curses.newwin(1, max(1, w-1), max(0, h-1), 0)
+            win.addnstr(0, 0, " " * (w-1), w-1)
+            win.addnstr(0, 0, prompt_text, w-1)
+            win.refresh()
+            s = win.getstr(0, start_col).decode(errors='ignore')
+        except Exception:
+            # 回退方案直接用 stdscr
+            stdscr.addnstr(h-1, 0, prompt_text, w-1)
+            stdscr.refresh()
+            s = stdscr.getstr(h-1, start_col).decode(errors='ignore')
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+            # 恢复刷新设定
+            stdscr.timeout(prev_timeout if prev_timeout is not None else -1)
         return s.strip()
 
     def save_config():
