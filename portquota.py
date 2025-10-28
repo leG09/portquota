@@ -428,24 +428,30 @@ def run_tui(config_path: str):
         except Exception:
             pass
         h, w = stdscr.getmaxyx()
-        # 清理底部两行（消息/提示行）
-        if h-1 >= 0:
-            stdscr.addnstr(h-1, 0, " " * (w-1), w-1)
+        # 清理底部两行（提示行在倒数第二行，输入在最底行）
         if h-2 >= 0:
             stdscr.addnstr(h-2, 0, " " * (w-1), w-1)
-        # 限制提示文本不超过宽度
-        prompt_text = msg[: max(0, w-2)]
-        start_col = min(len(prompt_text), max(0, w-2))
+        if h-1 >= 0:
+            stdscr.addnstr(h-1, 0, " " * (w-1), w-1)
+        # 提示文本显示在倒数第二行，截断以适配宽度
+        if h-2 >= 0:
+            # 取尾部以保留关键信息
+            max_prompt = max(0, w-1)
+            display_msg = msg[-max_prompt:]
+            stdscr.addnstr(h-2, 0, display_msg, w-1)
+        # 输入在最底行，固定前缀，避免与提示重合
+        input_prefix = "> "
+        start_col = min(len(input_prefix), max(0, w-1))
+        if h-1 >= 0:
+            stdscr.addnstr(h-1, 0, input_prefix, w-1)
         # 使用单独的输入窗口，避免与主窗口属性冲突
         try:
-            win = curses.newwin(1, max(1, w-1), max(0, h-1), 0)
+            win = curses.newwin(1, max(1, w-1 - start_col), max(0, h-1), start_col)
             win.addnstr(0, 0, " " * (w-1), w-1)
-            win.addnstr(0, 0, prompt_text, w-1)
             win.refresh()
-            s = win.getstr(0, start_col).decode(errors='ignore')
+            s = win.getstr(0, 0).decode(errors='ignore')
         except Exception:
             # 回退方案直接用 stdscr
-            stdscr.addnstr(h-1, 0, prompt_text, w-1)
             stdscr.refresh()
             s = stdscr.getstr(h-1, start_col).decode(errors='ignore')
         finally:
