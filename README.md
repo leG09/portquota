@@ -50,31 +50,9 @@ install.sh --repo https://github.com/leG09/portquota.git --branch main \
 install.sh --skip-ufw-config
 ```
 
-## 3. 快速开始（更简单）
+## 3. 快速开始
 
-安装完成后，使用交互式向导生成配置：
-
-```bash
-sudo portquota init --write
-```
-
-非交互生成示例：
-
-```bash
-sudo portquota init \
-  --unit GB \
-  --interval 5 \
-  --usage-file /root/portquota/usage.json \
-  --exclude-ifaces lo,docker0 \
-  --protocols tcp,udp \
-  --ports 52135:1:both,51235:50 --write --yes
-```
-
-然后重启服务使配置生效：
-
-```bash
-sudo systemctl restart portquota
-```
+安装完成后，直接运行 `portquota` 进入交互界面（TUI）。在界面内添加/编辑端口并保存配置，随后在界面内按 `R` 可一键重启服务使之生效。
 
 ## 4. 配置文件
 
@@ -129,45 +107,12 @@ limit_gb = 50
 
 提示：保存后运行 `sudo systemctl restart portquota` 应用新配置。
 
-## 6. 程序命令
+## 6. 守护进程
 
-安装脚本会自动创建全局 `portquota` 命令。
-
-### 查看状态
-
-显示所有被监控端口的当前流量使用情况。
+如需仅运行后台配额管理（不进入界面），可以使用 systemd 服务或 `--daemon`：
 
 ```bash
-portquota status
-```
-
-**示例输出:**
-```
-52135: 1.1193/1.0 GB [both]  -> blocked
-51235: 0.0355/50.0 GB [both]  -> open
-```
-
-使用 `json` 参数可获取 JSON 格式的输出。
-
-### 重置流量
-
-清空指定端口的流量计数器，并使用 UFW 重新允许该端口。
-
-```bash
-portquota reset 52135
-```
-
-### 服务管理
-
-使用 `systemctl` 控制后台守护进程。
-
-```bash
-# 查看服务状态
-systemctl status portquota
-
-# 重启服务（修改配置后使用）
-systemctl restart portquota
-
-# 停止服务
-systemctl stop portquota
+sudo systemctl restart portquota
+# 或
+sudo portquota --daemon
 ```

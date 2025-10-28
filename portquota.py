@@ -582,37 +582,14 @@ def loop(cfg:dict):
         time.sleep(interval)
 
 def main():
-    parser = argparse.ArgumentParser(description="Per-port traffic quota enforcer (nftables counters + UFW)")
+    parser = argparse.ArgumentParser(description="PortQuota - 终端交互界面与守护进程")
     parser.add_argument("-c","--config", default="/root/portquota/config.toml")
-    parser.add_argument("--daemon", action="store_true", help="Run as daemon")
-    sub = parser.add_subparsers(dest="cmd")
+    parser.add_argument("--daemon", action="store_true", help="以守护进程模式运行（读取配置并执行配额管理）")
+    args, _unknown = parser.parse_known_args()
 
-    r = sub.add_parser("reset", help="Reset a port's usage and reopen via UFW")
-    r.add_argument("port", type=int)
-
-    s = sub.add_parser("status", help="Print current snapshot from nft (and ensure rules exist)")
-    s.add_argument("--json", action="store_true")
-
-    i = sub.add_parser("init", help="Interactive/Non-interactive config generator")
-    i.add_argument("--yes", action="store_true", help="Assume yes for prompts")
-    i.add_argument("--force", action="store_true", help="Overwrite existing config without prompt")
-    i.add_argument("--unit", choices=["GB","GiB","GIB","gb","gib"], help="Unit for traffic quota")
-    i.add_argument("--interval", type=int, help="Sampling interval seconds")
-    i.add_argument("--usage-file", dest="usage_file", help="Usage output JSON path")
-    i.add_argument("--exclude-ifaces", dest="exclude_ifaces", help="Comma separated interfaces to exclude, e.g. lo,docker0")
-    i.add_argument("--protocols", help="Comma separated protocols to count, e.g. tcp,udp")
-    i.add_argument("--ports", help="Comma list of entries port:limit[:direction], e.g. 52135:1:both,51235:50")
-    i.add_argument("--write", action="store_true", help="Write to --config instead of preview to stdout")
-
-    args = parser.parse_args()
-
-    # Root 权限要求：除 init 外的命令需要 root
-    if args.cmd != "init" and os.geteuid() != 0:
-        print("需要 root 权限。请使用 sudo 运行，例如: sudo portquota status", file=sys.stderr); sys.exit(1)
-
-    if args.cmd == "init":
-        perform_init(args)
-        return
+    # 守护进程需要 root
+    if args.daemon and os.geteuid() != 0:
+        print("需要 root 权限。请使用 sudo 运行，例如: sudo portquota --daemon", file=sys.stderr); sys.exit(1)
 
     cfg = load_config(args.config)
 
@@ -646,7 +623,7 @@ def main():
     if args.daemon:
         loop(cfg)
     else:
-        # 无子命令、非 daemon：进入 TUI
+        # 非 daemon：进入 TUI（唯一交互方式）
         run_tui(args.config)
 
 if __name__=="__main__":

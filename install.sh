@@ -239,8 +239,8 @@ main() {
     create_command_link
     echo -e "\n${GREEN}🎉 PortQuota 安装成功！${NC}\n"
     echo -e "使用建议："
-    echo -e "  - 首次编辑配置:  sudo portquota init --write"
-    echo -e "  - 查看状态:     sudo portquota status"
+    echo -e "  - 运行交互界面:  sudo portquota （添加/编辑端口并保存）"
+    echo -e "  - 界面内按 R 重启服务使配置生效"
 }
 
 main "$@"
