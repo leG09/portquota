@@ -255,9 +255,9 @@ def perform_init(args):
         "[general]",
         f"interval_sec = {int(interval)}",
         f"usage_file   = \"{usage_file}\"",
-        f"exclude_ifaces = [{', '.join(f'\"{i}\"' for i in exclude_ifaces)}]",
+        f"exclude_ifaces = {json.dumps(exclude_ifaces)}",
         f"unit = \"{unit}\"",
-        f"protocols = [{', '.join(f'\"{p}\"' for p in protocols)}]",
+        f"protocols = {json.dumps(protocols)}",
         "",
     ]
     toml_text = "\n".join(header) + to_toml_list(ports)
@@ -288,9 +288,9 @@ def render_config_toml(general: dict, ports: list[dict]) -> str:
         "[general]",
         f"interval_sec = {interval}",
         f"usage_file   = \"{usage_file}\"",
-        f"exclude_ifaces = [{', '.join(f'\"{i}\"' for i in exclude_ifaces)}]",
+        f"exclude_ifaces = {json.dumps(exclude_ifaces)}",
         f"unit = \"{unit}\"",
-        f"protocols = [{', '.join(f'\"{p}\"' for p in protocols)}]",
+        f"protocols = {json.dumps(protocols)}",
         "",
     ]
 
