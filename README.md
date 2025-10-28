@@ -26,7 +26,7 @@
 
 **使用 curl:**
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/refs/heads/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/refs/heads/main/install.sh)" -- --yes
 ```
 
 安装成功后，卸载脚本位于 `/root/portquota/uninstall.sh`。
@@ -36,7 +36,47 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/re
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsingfenger/portquota/refs/heads/main/uninstall.sh)"
 ```
 
-## 3. 配置文件
+### 非交互安装参数
+
+```bash
+# 完全非交互（隐含 --yes 并跳过 UFW 配置提示）
+install.sh --non-interactive
+
+# 指定自定义仓库/分支与安装目录
+install.sh --repo https://github.com/tsingfenger/portquota.git --branch main \
+           --install-dir /root/portquota --bin-dir /usr/local/bin
+
+# 跳过 UFW 首次配置（保留现有 UFW 策略）
+install.sh --skip-ufw-config
+```
+
+## 3. 快速开始（更简单）
+
+安装完成后，使用交互式向导生成配置：
+
+```bash
+sudo portquota init --write
+```
+
+非交互生成示例：
+
+```bash
+sudo portquota init \
+  --unit GB \
+  --interval 5 \
+  --usage-file /root/portquota/usage.json \
+  --exclude-ifaces lo,docker0 \
+  --protocols tcp,udp \
+  --ports 52135:1:both,51235:50 --write --yes
+```
+
+然后重启服务使配置生效：
+
+```bash
+sudo systemctl restart portquota
+```
+
+## 4. 配置文件
 
 所有配置均在 `/root/portquota/config.toml` 文件中定义。修改配置后，**必须重启服务**才能生效：`systemctl restart portquota`。
 
@@ -71,7 +111,25 @@ limit_gb = 50
 ```
 
 
-## 4. 程序命令
+## 5. 交互界面（TUI）
+
+安装后，直接运行 `portquota`（不带参数）即可进入终端交互界面：
+
+按键说明：
+- ↑/↓ 或 j/k: 移动选择
+- Space 或 r: 刷新用量
+- Enter: 重置选中端口（清零并允许 UFW）
+- A: 添加端口
+- E: 编辑端口限额/方向
+- D: 删除端口（需保存后生效）
+- S: 保存配置到 `config.toml`（需手动重启服务生效）
+- W: 开启/关闭自动刷新（每秒刷新一次）
+- R: 一键重启守护服务（需要 root）
+- Q: 退出
+
+提示：保存后运行 `sudo systemctl restart portquota` 应用新配置。
+
+## 6. 程序命令
 
 安装脚本会自动创建全局 `portquota` 命令。
 
