@@ -420,10 +420,13 @@ def run_tui(config_path: str):
 
     def prompt(stdscr, msg) -> str:
         # 暂停自动刷新，进入输入模式
-        prev_timeout = stdscr.gettimeout()
+        prev_timeout = 1000 if state.get("watch") else -1
         stdscr.timeout(-1)
         curses.echo()
-        curses.curs_set(1)
+        try:
+            curses.curs_set(1)
+        except Exception:
+            pass
         h, w = stdscr.getmaxyx()
         # 清理底部两行（消息/提示行）
         if h-1 >= 0:
@@ -447,9 +450,12 @@ def run_tui(config_path: str):
             s = stdscr.getstr(h-1, start_col).decode(errors='ignore')
         finally:
             curses.noecho()
-            curses.curs_set(0)
+            try:
+                curses.curs_set(0)
+            except Exception:
+                pass
             # 恢复刷新设定
-            stdscr.timeout(prev_timeout if prev_timeout is not None else -1)
+            stdscr.timeout(prev_timeout)
         return s.strip()
 
     def save_config():
