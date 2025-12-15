@@ -182,6 +182,45 @@ configure_ufw() {
     fi
 }
 
+# 同步文件，必要时保留配置文件，rsync 缺失时使用回退方案
+sync_with_preserve_config() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    local preserve_config="$3" # "true" | "false"
+
+    mkdir -p "$dst_dir"
+
+    local has_config=false
+    local config_backup=""
+    if [ "$preserve_config" = "true" ] && [ -f "$dst_dir/config.toml" ]; then
+        has_config=true
+        config_backup="$(mktemp)"
+        cp "$dst_dir/config.toml" "$config_backup"
+    fi
+
+    if command -v rsync >/dev/null 2>&1; then
+        if [ "$preserve_config" = "true" ]; then
+            rsync -a --delete --exclude "config.toml" "$src_dir" "$dst_dir/" || error "同步更新失败。"
+        else
+            rsync -a "$src_dir" "$dst_dir/" || error "同步写入失败。"
+        fi
+    else
+        warn "rsync 未安装，使用回退拷贝方式（不执行 --delete）。"
+        if [ "$preserve_config" = "true" ]; then
+            # 清理除 config.toml 以外的内容，再复制
+            find "$dst_dir" -mindepth 1 -maxdepth 1 ! -name "config.toml" -exec rm -rf {} + 2>/dev/null || true
+        else
+            rm -rf "$dst_dir"
+            mkdir -p "$dst_dir"
+        fi
+        cp -a "$src_dir" "$dst_dir/" || error "回退拷贝失败。"
+    fi
+
+    if [ "$has_config" = true ] && [ -n "$config_backup" ] && [ -f "$config_backup" ]; then
+        mv "$config_backup" "$dst_dir/config.toml"
+    fi
+}
+
 # 下载项目文件
 download_project() {
     info "正在从 GitHub 获取项目源码..."
@@ -204,12 +243,10 @@ download_project() {
 
     if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/config.toml" ]; then
         info "检测到已安装实例，保留配置文件，仅更新程序文件。"
-        rsync -a --delete \
-            --exclude "config.toml" \
-            "$tmp_dir/" "$INSTALL_DIR/" || error "同步更新失败。"
+        sync_with_preserve_config "$tmp_dir/" "$INSTALL_DIR" "true"
     else
         info "首次安装，写入目录 $INSTALL_DIR。"
-        rsync -a "$tmp_dir/" "$INSTALL_DIR/" || error "同步写入失败。"
+        sync_with_preserve_config "$tmp_dir/" "$INSTALL_DIR" "false"
     fi
 
     rm -rf "$tmp_dir"
