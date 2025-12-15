@@ -4,7 +4,7 @@ interval_sec = 5
 usage_file   = "/root/portquota/usage.json"
 
 # 接口排除：不统计 lo、docker0；如需统计本机回环，把 "lo" 删掉
-exclude_ifaces = ["lo","docker0"]
+exclude_ifaces = ["lo"]
 
 # 单位：GB(10^9) 或 GiB(2^30)
 unit = "GB"
