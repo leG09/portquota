@@ -15,31 +15,6 @@ protocols = ["tcp","udp"]
 # === 被限额的端口 ===
 # direction = "both"（默认，入+出总量）| "ingress"（仅入）| "egress"（仅出）
 
-[[ports]]
-port = 52135
-limit_gb = 1
-direction = "both"
-
-[[ports]]
-port = 51235
-limit_gb = 50
-direction = "both"
-
-[[ports]]
-port = 51236
-limit_gb = 50
-direction = "both"
-
-[[ports]]
-port = 51237
-limit_gb = 50
-direction = "both"
-
-[[ports]]
-port = 51238
-limit_gb = 50
-direction = "both"
-
 # 再加更多端口：
 # [[ports]]
 # port = 51235

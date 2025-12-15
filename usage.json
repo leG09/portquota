@@ -2,12 +2,6 @@
   "timestamp": "2025-12-15T03:21:25+00:00",
   "unit": "GB",
   "ports": {
-    "19485": {
-      "bytes": 0,
-      "used_gb": 0.0,
-      "limit_gb": 1.0,
-      "direction": "both",
-      "status": "open"
-    }
+ 
   }
 }
