@@ -61,10 +61,10 @@ def sync_rules(cfg: dict):
     nft_f(f"flush chain {FAMILY} {TABLE} {PREROUTING}")
     nft_f(f"flush chain {FAMILY} {TABLE} {POSTROUTING}")
 
-    def add_one(direction, proto, port, counter_name):
+    def add_one(direction, proto, port, backend_port, counter_name):
         # 给规则加上 comment，便于诊断
-        line = rule_line(exclude_ifaces, proto, direction, port, counter_name) + \
-               f' comment "pq:{port}:{direction}:{proto}"'
+        line = rule_line(exclude_ifaces, proto, direction, port, backend_port, counter_name) + \
+               f' comment "pq:{port}->{backend_port}:{direction}:{proto}"'
         logger.debug(f"添加规则: {line}")
         nft_f(line)
 
@@ -73,11 +73,12 @@ def sync_rules(cfg: dict):
     logger.info(f"配置了 {len(ports)} 个端口")
     for p in ports:
         port = int(p["port"])
+        backend_port = int(p.get("backend_port", port))
         direction = p.get("direction", "both")
         protocols_here = protocols
         cname = f"port{port}_total"
         ensure_counter(cname)
-        logger.info(f"为端口 {port} (方向: {direction}) 创建规则")
+        logger.info(f"为端口 {port} (后端端口 {backend_port}, 方向: {direction}) 创建规则")
 
         # 对于 both 方向，需要同时监控入口和出口流量
         # Docker 端口映射流量路径：
@@ -103,7 +104,7 @@ def sync_rules(cfg: dict):
         
         for d in dirs:
             for proto in protocols_here:
-                add_one(d, proto, port, cname)
+                add_one(d, proto, port, backend_port, cname)
     
     logger.info("规则同步完成")
 
@@ -162,12 +163,10 @@ def ensure_counter(counter_name):
     if run(["nft","list","counter",FAMILY,TABLE,counter_name]).returncode != 0:
         nft_f(f"add counter {FAMILY} {TABLE} {counter_name}")
 
-def rule_line(exclude_ifaces, proto, direction, port, counter_name):
-    # 对于 Docker 端口映射，关键是在 DNAT 之前捕获流量
-    # - prerouting hook: 在 DNAT 之前，目标端口是映射的外部端口（如 19845），这是关键！
-    # - postrouting hook: 在 SNAT 之后，可以捕获出口流量
-    # - input/output/forward hooks: 在 DNAT/SNAT 之后，端口可能已改变
-    
+def rule_line(exclude_ifaces, proto, direction, port, backend_port, counter_name):
+    """
+    backend_port: 容器/后端实际监听端口（出口方向使用 sport 匹配）
+    """
     iface = ""
     if exclude_ifaces:
         names = ", ".join(f'"{i}"' for i in exclude_ifaces)
@@ -206,11 +205,11 @@ def rule_line(exclude_ifaces, proto, direction, port, counter_name):
         # 为了简化，我们同时匹配源端口和目标端口，使用 OR 逻辑
         # 但实际上 nftables 不支持 OR，所以我们需要两条规则
         # 暂时只匹配源端口，假设 SNAT 会映射回原始端口
-        port_expr = f"{proto} sport {port}"
+        port_expr = f"{proto} sport {backend_port}"
     elif direction in (INGRESS, FORWARD):
         port_expr = f"{proto} dport {port}"
     else:  # EGRESS
-        port_expr = f"{proto} sport {port}"
+        port_expr = f"{proto} sport {backend_port}"
     
     return f"add rule {FAMILY} {TABLE} {direction} {iface}{port_expr} counter name {counter_name}"
 
