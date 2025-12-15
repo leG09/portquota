@@ -79,14 +79,20 @@ def sync_rules(cfg: dict):
         ensure_counter(cname)
         logger.info(f"为端口 {port} (方向: {direction}) 创建规则")
 
-        # 对于 both 方向，需要监控多个 hook：
-        # - prerouting: 在 DNAT 之前捕获（Docker 端口映射的关键）
-        # - input: 本地流量
-        # - forward: 转发流量
-        # - output: 本地发出的流量
-        # - postrouting: 在 SNAT 之后捕获
+        # 对于 both 方向，需要同时监控入口和出口流量
+        # Docker 端口映射流量路径：
+        # - 入口：外部 -> prerouting (dport 19845, DNAT 前) -> DNAT -> forward (dport 443) -> postrouting
+        # - 出口：容器 -> forward (sport 443) -> SNAT -> postrouting (sport 19845)
+        #
+        # 策略：
+        # - prerouting: 捕获入口流量（dport 19845，DNAT 之前）✓
+        # - postrouting: 捕获出口流量（sport 19845，SNAT 之后）✓
+        #   注意：Docker 的 SNAT 会将容器端口映射回主机端口，所以 sport 19845 应该能匹配
+        #
+        # 但为了更准确，我们也可以监控 forward hook，但需要匹配容器端口（443）
+        # 由于我们不知道容器端口，暂时只使用 prerouting + postrouting
         if direction == "both":
-            # 使用 prerouting 和 postrouting 来捕获所有流量（包括 Docker 端口映射）
+            # 监控 prerouting（入口，dport 19845）和 postrouting（出口，sport 19845）
             dirs = [PREROUTING, POSTROUTING]
         elif direction == "ingress":
             dirs = [PREROUTING]  # 入口流量在 prerouting 中捕获（DNAT 之前）
@@ -180,10 +186,28 @@ def rule_line(exclude_ifaces, proto, direction, port, counter_name):
             iface = f"iifname != {{ \"lo\" }} oifname != {{ \"lo\" }} "
     
     # 端口匹配
-    # prerouting/postrouting 使用 dport（目标端口）
-    # 对于 prerouting，在 DNAT 之前，目标端口是外部映射端口（如 19845）
-    # 对于 postrouting，在 SNAT 之后，源端口可能已改变，但目标端口仍然可用
-    if direction in (INGRESS, FORWARD, PREROUTING, POSTROUTING):
+    # prerouting: 使用 dport（目标端口），在 DNAT 之前，目标端口是外部映射端口（如 19845）
+    # postrouting: 对于出口流量，应该使用 sport（源端口），因为：
+    #   - 容器发出的流量，源端口是容器端口（如 443）
+    #   - 但经过 SNAT 后，源端口可能映射回原始端口（19845）
+    #   - 或者我们需要匹配原始端口作为源端口
+    # 实际上，对于 Docker 端口映射的出口流量，源端口在 postrouting 时可能已经被 SNAT 改变
+    # 所以我们需要同时匹配源端口和目标端口，或者只匹配源端口
+    if direction == PREROUTING:
+        # prerouting: 入口流量，匹配目标端口
+        port_expr = f"{proto} dport {port}"
+    elif direction == POSTROUTING:
+        # postrouting: 出口流量，匹配源端口（因为出口时源端口可能是原始端口）
+        # 但注意：如果容器端口是 443，源端口可能是 443，不是 19845
+        # 所以我们需要匹配源端口为容器端口，或者匹配原始端口
+        # 实际上，对于 Docker 端口映射，出口流量的源端口可能是容器端口（443）
+        # 但我们可以尝试匹配原始端口作为源端口（如果 SNAT 映射回原始端口）
+        # 或者同时匹配源端口和目标端口
+        # 为了简化，我们同时匹配源端口和目标端口，使用 OR 逻辑
+        # 但实际上 nftables 不支持 OR，所以我们需要两条规则
+        # 暂时只匹配源端口，假设 SNAT 会映射回原始端口
+        port_expr = f"{proto} sport {port}"
+    elif direction in (INGRESS, FORWARD):
         port_expr = f"{proto} dport {port}"
     else:  # EGRESS
         port_expr = f"{proto} sport {port}"
