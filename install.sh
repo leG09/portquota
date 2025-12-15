@@ -109,7 +109,7 @@ check_and_install_deps() {
     PKG_MANAGER="apt-get"
     
     # 需要检查的包（命令）
-    REQUIRED_CMDS=("python3" "nft" "ufw" "git")
+    REQUIRED_CMDS=("python3" "nft" "ufw" "git" "rsync")
     PACKAGES_TO_INSTALL=()
     UFW_NEEDS_INSTALL=false
 
