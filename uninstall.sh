@@ -60,7 +60,16 @@ main() {
     rm -f "$BIN_DIR/$EXEC_NAME"
     info "全局命令已移除。"
 
-    # 4. 删除项目文件夹
+    # 4. 清理 nftables 表和规则
+    info "正在清理 nftables 表和规则..."
+    if nft list table inet traffic &> /dev/null; then
+        nft delete table inet traffic 2>/dev/null || warn "清理 nftables 表时出现警告（可能表已被删除）。"
+        info "nftables 表和规则已清理。"
+    else
+        info "nftables 表不存在，无需清理。"
+    fi
+
+    # 5. 删除项目文件夹
     info "正在删除安装目录: $INSTALL_DIR..."
     rm -rf "$INSTALL_DIR"
     info "项目文件已删除。"

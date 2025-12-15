@@ -200,6 +200,17 @@ download_project() {
     fi
 }
 
+# 清理旧的 nftables 表和规则
+cleanup_nftables() {
+    info "正在清理旧的 nftables 表和规则..."
+    if nft list table inet traffic &> /dev/null; then
+        nft delete table inet traffic 2>/dev/null || warn "清理 nftables 表时出现警告（可能表已被删除）。"
+        info "旧的 nftables 表和规则已清理。"
+    else
+        info "未发现旧的 nftables 表，无需清理。"
+    fi
+}
+
 # 3. 启用 Service
 setup_service() {
     info "正在安装和启用 systemd 服务..."
@@ -235,6 +246,7 @@ main() {
     check_root
     check_and_install_deps
     download_project
+    cleanup_nftables
     setup_service
     create_command_link
     echo -e "\n${GREEN}🎉 PortQuota 安装成功！${NC}\n"
