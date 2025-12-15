@@ -437,6 +437,9 @@ def render_config_toml(general: dict, ports: list[dict]) -> str:
         for it in ps:
             lines.append("[[ports]]")
             lines.append(f"port = {int(it['port'])}")
+            backend_port = int(it.get("backend_port", it["port"]))
+            if backend_port != int(it["port"]):
+                lines.append(f"backend_port = {backend_port}")
             lim = ("%s" % it['limit_gb']).rstrip('0').rstrip('.') if isinstance(it['limit_gb'], float) else str(it['limit_gb'])
             lines.append(f"limit_gb = {lim}")
             lines.append(f"direction = \"{it.get('direction','both')}\"")
@@ -458,14 +461,15 @@ def run_tui(config_path: str):
     ensure_infra()
     sync_rules(cfg)
 
-    items = []  # (port, limit_gb, direction, counter_name)
+    items = []  # (port, backend_port, limit_gb, direction, counter_name)
     for p in ports_cfg:
         port = int(p["port"])
+        backend_port = int(p.get("backend_port", port))
         limit_gb = float(p["limit_gb"])
         direction = p.get("direction","both")
         cname = f"port{port}_total"
         ensure_counter(cname)
-        items.append((port, limit_gb, direction, cname))
+        items.append((port, backend_port, limit_gb, direction, cname))
 
     unit = (general.get("unit","GB")).upper()
     unit_size = 1_000_000_000 if unit=="GB" else 1_073_741_824
@@ -480,11 +484,12 @@ def run_tui(config_path: str):
 
     def snapshot():
         rows = []
-        for (port, limit_gb, direction, cname) in items:
+        for (port, backend_port, limit_gb, direction, cname) in items:
             b = nft_counter_bytes(cname)
             status = "blocked" if b >= int(limit_gb*unit_size) else "open"
             rows.append({
                 "port": port,
+                "backend_port": backend_port,
                 "used": round(b/unit_size, 4),
                 "limit": limit_gb,
                 "direction": direction,
@@ -507,7 +512,7 @@ def run_tui(config_path: str):
 
         stdscr.addnstr(0, 0, title, w-1, curses.color_pair(1))
         stdscr.hline(1, 0, ord('-'), w-1)
-        header = f" Port    Used/{unit:<4}   Limit/{unit:<4}  Direction  Status"
+        header = f" Port  BPort   Used/{unit:<4}   Limit/{unit:<4}  Direction  Status"
         stdscr.addnstr(2, 0, header, w-1, curses.A_BOLD | curses.color_pair(1))
         stdscr.hline(3, 0, ord('='), w-1)
         start_line = 4
@@ -525,7 +530,7 @@ def run_tui(config_path: str):
             global_idx = state["top"] + idx
             selected = (global_idx == state["selected"]) 
             prefix = ">" if selected else " "
-            line = f"{prefix} {r['port']:<7} {r['used']:<10.4f} {r['limit']:<10.4f} {r['direction']:<9} "
+            line = f"{prefix} {r['port']:<5} {r.get('backend_port', r['port']):<7} {r['used']:<10.4f} {r['limit']:<10.4f} {r['direction']:<9} "
             attr = curses.A_NORMAL
             if r['status'] == 'open':
                 attr |= curses.color_pair(2)
@@ -608,8 +613,8 @@ def run_tui(config_path: str):
 
     def save_config():
         new_ports = []
-        for (port, limit_gb, direction, _cname) in items:
-            new_ports.append({"port": port, "limit_gb": limit_gb, "direction": direction})
+        for (port, backend_port, limit_gb, direction, _cname) in items:
+            new_ports.append({"port": port, "backend_port": backend_port, "limit_gb": limit_gb, "direction": direction})
         text = render_config_toml(general, new_ports)
         write_text_atomic(config_path, text)
         # 保存后重新加载配置并同步规则
@@ -621,11 +626,12 @@ def run_tui(config_path: str):
         items.clear()
         for p in cfg.get("ports", []):
             port = int(p["port"])
+            backend_port = int(p.get("backend_port", port))
             limit_gb = float(p["limit_gb"])
             direction = p.get("direction","both")
             cname = f"port{port}_total"
             ensure_counter(cname)
-            items.append((port, limit_gb, direction, cname))
+            items.append((port, backend_port, limit_gb, direction, cname))
         # 调整选中索引，避免越界
         if state["selected"] >= len(items):
             state["selected"] = max(0, len(items) - 1)
@@ -658,18 +664,26 @@ def run_tui(config_path: str):
                     state["message"] = f"已重置端口 {port} 并允许 UFW"
             elif ch in (ord('e'), ord('E')):
                 if items:
-                    port, limit_gb, direction, cname = items[state["selected"]]
+                    port, backend_port, limit_gb, direction, cname = items[state["selected"]]
                     new_lim = prompt(stdscr, f"端口 {port} 新的限额GB(当前 {limit_gb}): ")
                     if new_lim:
                         try:
                             limit_gb = float(new_lim)
-                            items[state["selected"]] = (port, limit_gb, direction, cname)
+                            items[state["selected"]] = (port, backend_port, limit_gb, direction, cname)
                             state["message"] = f"已更新端口 {port} 限额为 {limit_gb} GB"
                         except Exception:
                             state["message"] = "输入无效，未修改"
+                    new_backend = prompt(stdscr, f"后端端口(容器端口) (当前 {backend_port}, 默认与外部端口相同): ")
+                    if new_backend:
+                        try:
+                            backend_port = int(new_backend)
+                            items[state["selected"]] = (port, backend_port, limit_gb, direction, cname)
+                            state["message"] = f"已更新端口 {port} 后端端口为 {backend_port}"
+                        except Exception:
+                            state["message"] = "输入无效，后端端口未修改"
                     new_dir = prompt(stdscr, f"方向 both/ingress/egress(当前 {direction}): ")
                     if new_dir in ("both","ingress","egress"):
-                        items[state["selected"]] = (port, limit_gb, new_dir, cname)
+                        items[state["selected"]] = (port, backend_port, limit_gb, new_dir, cname)
                         state["message"] = f"已更新端口 {port} 方向为 {new_dir}"
             elif ch in (ord('a'), ord('A')):
                 sp = prompt(stdscr, "新增端口: ")
@@ -681,15 +695,20 @@ def run_tui(config_path: str):
                         sdir = prompt(stdscr, "方向 both/ingress/egress(默认 both): ") or "both"
                         if sdir not in ("both","ingress","egress"):
                             sdir = "both"
+                        sbackend = prompt(stdscr, f"后端端口(容器端口, 默认 {nport}): ") or str(nport)
+                        try:
+                            nbackend = int(sbackend)
+                        except Exception:
+                            nbackend = nport
                         cname = f"port{nport}_total"
                         ensure_counter(cname)
-                        items.append((nport, nlim, sdir, cname))
+                        items.append((nport, nbackend, nlim, sdir, cname))
                         state["selected"] = len(items)-1
                         # 立即同步规则，让新端口能开始计数
                         try:
                             temp_cfg = {"general": general, "ports": []}
-                            for (p, lim, dr, _cn) in items:
-                                temp_cfg["ports"].append({"port": p, "limit_gb": lim, "direction": dr})
+                            for (p, bport, lim, dr, _cn) in items:
+                                temp_cfg["ports"].append({"port": p, "backend_port": bport, "limit_gb": lim, "direction": dr})
                             ensure_infra()
                             sync_rules(temp_cfg)
                             state["message"] = f"已添加端口 {nport} 并同步规则"
@@ -713,8 +732,8 @@ def run_tui(config_path: str):
                     ensure_infra()
                     # 构建临时配置用于同步
                     temp_cfg = {"general": general, "ports": []}
-                    for (port, limit_gb, direction, _cname) in items:
-                        temp_cfg["ports"].append({"port": port, "limit_gb": limit_gb, "direction": direction})
+                    for (port, backend_port, limit_gb, direction, _cname) in items:
+                        temp_cfg["ports"].append({"port": port, "backend_port": backend_port, "limit_gb": limit_gb, "direction": direction})
                     sync_rules(temp_cfg)
                     state["message"] = f"已为 {len(items)} 个端口同步规则"
                 except Exception as e:
@@ -798,18 +817,19 @@ def loop(cfg:dict):
     logger.info(f"监控 {len(ports)} 个端口")
     for p in ports:
         port = int(p["port"])
+        backend_port = int(p.get("backend_port", port))
         limit_gb = float(p["limit_gb"])
         direction = p.get("direction","both")  # both/ingress/egress
         cname = f"port{port}_total"
         ensure_counter(cname)
-        items.append((port, limit_gb, direction, cname))
-        logger.info(f"监控端口 {port}: 限额 {limit_gb} {unit}, 方向 {direction}")
+        items.append((port, backend_port, limit_gb, direction, cname))
+        logger.info(f"监控端口 {port} (后端端口 {backend_port}): 限额 {limit_gb} {unit}, 方向 {direction}")
 
     loop_count = 0
     while True:
         loop_count += 1
         out = {"timestamp": now_iso(), "unit": unit, "ports": {}}
-        for (port, limit_gb, direction, cname) in items:
+        for (port, backend_port, limit_gb, direction, cname) in items:
             used_bytes = nft_counter_bytes(cname)
             limit_bytes = int(limit_gb * unit_size)
             exceeded = used_bytes >= limit_bytes
