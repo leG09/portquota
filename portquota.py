@@ -20,6 +20,7 @@ def nft_f(rules_text):
     if res.returncode != 0:
         print(f"nft 命令失败: {rules_text[:100]}", file=sys.stderr)
         print(f"错误输出: {res.stderr}", file=sys.stderr)
+        # 不抛出异常，但记录错误
     return res
 
 def sync_rules(cfg: dict):
@@ -61,10 +62,21 @@ def sync_rules(cfg: dict):
 def ensure_infra():
     if run(["nft","list","table",FAMILY,TABLE]).returncode != 0:
         nft_f(f"add table {FAMILY} {TABLE}")
-    if run(["nft","list","chain",FAMILY,TABLE,INGRESS]).returncode != 0:
-        nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority 10; policy accept; }}")
-    if run(["nft","list","chain",FAMILY,TABLE,EGRESS]).returncode != 0:
-        nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority 10; policy accept; }}")
+    # 使用优先级 -50，在 UFW 之后（UFW 通常使用 -50 或更高）
+    # 这样可以确保流量已经被 UFW 处理过，但仍然能被计数
+    # 如果链已存在但优先级不同，需要删除并重新创建
+    ingress_exists = run(["nft","list","chain",FAMILY,TABLE,INGRESS]).returncode == 0
+    egress_exists = run(["nft","list","chain",FAMILY,TABLE,EGRESS]).returncode == 0
+    
+    if ingress_exists:
+        # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
+        nft_f(f"delete chain {FAMILY} {TABLE} {INGRESS}")
+    nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority -50; policy accept; }}")
+    
+    if egress_exists:
+        # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
+        nft_f(f"delete chain {FAMILY} {TABLE} {EGRESS}")
+    nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority -50; policy accept; }}")
 
 def ensure_counter(counter_name):
     if run(["nft","list","counter",FAMILY,TABLE,counter_name]).returncode != 0:
