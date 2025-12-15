@@ -22,6 +22,7 @@ FAMILY = "inet"
 TABLE = "traffic"
 INGRESS = "ingress"
 EGRESS = "egress"
+FORWARD = "forward"
 
 def run(cmd, input_text=None):
     return subprocess.run(cmd, input=input_text, text=True, capture_output=True)
@@ -51,9 +52,10 @@ def sync_rules(cfg: dict):
     ensure_infra()
 
     # 清空我们自己的链（不影响计数器）
-    logger.info("清空 ingress 和 egress 链")
+    logger.info("清空 ingress、egress 和 forward 链")
     nft_f(f"flush chain {FAMILY} {TABLE} {INGRESS}")
     nft_f(f"flush chain {FAMILY} {TABLE} {EGRESS}")
+    nft_f(f"flush chain {FAMILY} {TABLE} {FORWARD}")
 
     def add_one(direction, proto, port, counter_name):
         # 给规则加上 comment，便于诊断
@@ -73,7 +75,16 @@ def sync_rules(cfg: dict):
         ensure_counter(cname)
         logger.info(f"为端口 {port} (方向: {direction}) 创建规则")
 
-        dirs = [INGRESS, EGRESS] if direction == "both" else [direction]
+        # 对于 both 方向，需要监控 input、output 和 forward（用于 Docker 网络）
+        if direction == "both":
+            dirs = [INGRESS, EGRESS, FORWARD]
+        elif direction == "ingress":
+            dirs = [INGRESS, FORWARD]  # ingress 也需要 forward（Docker 转发）
+        elif direction == "egress":
+            dirs = [EGRESS, FORWARD]  # egress 也需要 forward（Docker 转发）
+        else:
+            dirs = [direction]
+        
         for d in dirs:
             for proto in protocols_here:
                 add_one(d, proto, port, cname)
@@ -89,37 +100,58 @@ def ensure_infra():
     else:
         logger.debug(f"表 {FAMILY} {TABLE} 已存在")
     
-    # 使用优先级 0，在大多数规则之后但在最终决策之前
-    # 这样可以确保流量已经被其他规则（如 UFW）处理过，但仍然能被计数
+    # 使用优先级 -150，确保在其他规则之前处理
+    # nftables 优先级：负数 = 更高优先级（更早处理），正数 = 更低优先级（更晚处理）
+    # 使用 -150 确保在大多数规则之前处理，这样流量一定会经过我们的计数器
     # 如果链已存在但优先级不同，需要删除并重新创建
     ingress_exists = run(["nft","list","chain",FAMILY,TABLE,INGRESS]).returncode == 0
     egress_exists = run(["nft","list","chain",FAMILY,TABLE,EGRESS]).returncode == 0
+    forward_exists = run(["nft","list","chain",FAMILY,TABLE,FORWARD]).returncode == 0
     
     if ingress_exists:
         logger.info("删除现有的 ingress 链以更新优先级")
         # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
         nft_f(f"delete chain {FAMILY} {TABLE} {INGRESS}")
-    logger.info("创建 ingress 链 (priority 0)")
-    nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority 0; policy accept; }}")
+    logger.info("创建 ingress 链 (priority -150)")
+    nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority -150; policy accept; }}")
     
     if egress_exists:
         logger.info("删除现有的 egress 链以更新优先级")
         # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
         nft_f(f"delete chain {FAMILY} {TABLE} {EGRESS}")
-    logger.info("创建 egress 链 (priority 0)")
-    nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority 0; policy accept; }}")
+    logger.info("创建 egress 链 (priority -150)")
+    nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority -150; policy accept; }}")
+    
+    if forward_exists:
+        logger.info("删除现有的 forward 链以更新优先级")
+        # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
+        nft_f(f"delete chain {FAMILY} {TABLE} {FORWARD}")
+    logger.info("创建 forward 链 (priority -150) - 用于监控 Docker 网络流量")
+    nft_f(f"add chain {FAMILY} {TABLE} {FORWARD} {{ type filter hook forward priority -150; policy accept; }}")
 
 def ensure_counter(counter_name):
     if run(["nft","list","counter",FAMILY,TABLE,counter_name]).returncode != 0:
         nft_f(f"add counter {FAMILY} {TABLE} {counter_name}")
 
 def rule_line(exclude_ifaces, proto, direction, port, counter_name):
-    # direction: "ingress" uses dport, "egress" uses sport
+    # direction: "ingress" uses dport, "egress" uses sport, "forward" uses dport
     iface = ""
     if exclude_ifaces:
         names = ", ".join(f'"{i}"' for i in exclude_ifaces)
-        iface = f"iifname != {{ {names} }} " if direction==INGRESS else f"oifname != {{ {names} }} "
-    port_expr = f"{proto} dport {port}" if direction==INGRESS else f"{proto} sport {port}"
+        if direction == INGRESS:
+            iface = f"iifname != {{ {names} }} "
+        elif direction == EGRESS:
+            iface = f"oifname != {{ {names} }} "
+        elif direction == FORWARD:
+            # forward hook 需要同时排除输入和输出接口
+            iface = f"iifname != {{ {names} }} oifname != {{ {names} }} "
+    
+    # forward hook 使用 dport（目标端口）
+    if direction == INGRESS or direction == FORWARD:
+        port_expr = f"{proto} dport {port}"
+    else:  # EGRESS
+        port_expr = f"{proto} sport {port}"
+    
     return f"add rule {FAMILY} {TABLE} {direction} {iface}{port_expr} counter name {counter_name}"
 
 def nft_counter_bytes(counter_name):
@@ -677,7 +709,12 @@ def loop(cfg:dict):
     res = run(["nft", "list", "table", FAMILY, TABLE])
     if res.returncode == 0:
         logger.info("nftables 表验证成功")
-        logger.debug(f"表内容:\n{res.stdout}")
+        # 显示规则数量以便诊断
+        rule_count = res.stdout.count("counter name")
+        logger.info(f"已创建 {rule_count} 条规则")
+        # 在调试模式下显示完整内容
+        if logger.level <= logging.DEBUG:
+            logger.debug(f"表内容:\n{res.stdout}")
     else:
         logger.error("无法列出 nftables 表")
 
