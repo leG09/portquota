@@ -316,6 +316,10 @@ def run_tui(config_path: str):
     general = cfg.get("general", {})
     ports_cfg = cfg.get("ports", [])
 
+    # 确保基础设施和规则同步（关键：让流量能被计数）
+    ensure_infra()
+    sync_rules(cfg)
+
     items = []  # (port, limit_gb, direction, counter_name)
     for p in ports_cfg:
         port = int(p["port"])
@@ -470,6 +474,23 @@ def run_tui(config_path: str):
             new_ports.append({"port": port, "limit_gb": limit_gb, "direction": direction})
         text = render_config_toml(general, new_ports)
         write_text_atomic(config_path, text)
+        # 保存后重新加载配置并同步规则
+        nonlocal cfg
+        cfg = load_config(config_path)
+        ensure_infra()
+        sync_rules(cfg)
+        # 更新 items 列表以反映新配置
+        items.clear()
+        for p in cfg.get("ports", []):
+            port = int(p["port"])
+            limit_gb = float(p["limit_gb"])
+            direction = p.get("direction","both")
+            cname = f"port{port}_total"
+            ensure_counter(cname)
+            items.append((port, limit_gb, direction, cname))
+        # 调整选中索引，避免越界
+        if state["selected"] >= len(items):
+            state["selected"] = max(0, len(items) - 1)
 
     def restart_service():
         res = run(["systemctl","restart","portquota"]) 
