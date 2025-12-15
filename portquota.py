@@ -135,18 +135,29 @@ def ensure_counter(counter_name):
 
 def rule_line(exclude_ifaces, proto, direction, port, counter_name):
     # direction: "ingress" uses dport, "egress" uses sport, "forward" uses dport
+    # 对于 Docker 端口映射：
+    # - input hook: 在 DNAT 之前，目标端口是映射的外部端口（如 19845），应该能捕获
+    # - forward hook: 在 DNAT 之后，目标端口可能已改变为容器端口（如 443），难以匹配
+    # 所以主要依赖 input hook 来捕获 Docker 端口映射的流量
     iface = ""
     if exclude_ifaces:
         names = ", ".join(f'"{i}"' for i in exclude_ifaces)
         if direction == INGRESS:
+            # input hook：只排除回环接口，不排除 docker0
+            # 因为 Docker 端口映射的流量从外部接口进入，不经过 docker0
+            # 但我们需要排除 "lo" 以避免统计本地回环流量
+            # 注意：docker0 的排除可能不必要，因为外部流量不经过它
             iface = f"iifname != {{ {names} }} "
         elif direction == EGRESS:
+            # output hook：排除回环接口
             iface = f"oifname != {{ {names} }} "
         elif direction == FORWARD:
-            # forward hook 需要同时排除输入和输出接口
-            iface = f"iifname != {{ {names} }} oifname != {{ {names} }} "
+            # forward hook：对于 Docker 端口映射，forward hook 中端口已改变
+            # 但保留规则以防万一，只排除回环接口
+            # 注意：不排除 docker0，因为转发流量可能经过它
+            iface = f"iifname != {{ \"lo\" }} oifname != {{ \"lo\" }} "
     
-    # forward hook 使用 dport（目标端口）
+    # 端口匹配
     if direction == INGRESS or direction == FORWARD:
         port_expr = f"{proto} dport {port}"
     else:  # EGRESS
@@ -717,6 +728,17 @@ def loop(cfg:dict):
             logger.debug(f"表内容:\n{res.stdout}")
     else:
         logger.error("无法列出 nftables 表")
+    
+    # 诊断：检查网络接口
+    res = run(["ip", "-br", "link", "show"])
+    if res.returncode == 0:
+        interfaces = [line.split()[0] for line in res.stdout.strip().split('\n') if line.strip()]
+        logger.info(f"检测到的网络接口: {', '.join(interfaces)}")
+        # 检查是否有 Docker 相关接口
+        docker_ifaces = [iface for iface in interfaces if 'docker' in iface.lower() or iface.startswith('br-') or iface.startswith('veth')]
+        if docker_ifaces:
+            logger.info(f"Docker 相关接口: {', '.join(docker_ifaces)}")
+            logger.warning("如果流量经过 Docker 接口，可能需要调整 exclude_ifaces 配置")
 
     # 预创建每个端口的计数器与规则
     items = []
