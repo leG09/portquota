@@ -184,20 +184,35 @@ configure_ufw() {
 
 # 下载项目文件
 download_project() {
-    info "正在从 GitHub 克隆项目到 $INSTALL_DIR..."
-    if [ -d "$INSTALL_DIR" ]; then
-        warn "安装目录 $INSTALL_DIR 已存在，将进行覆盖。"
-        rm -rf "$INSTALL_DIR"
-    fi
+    info "正在从 GitHub 获取项目源码..."
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
     if [[ -n "$CUSTOM_BRANCH" ]]; then
-        git clone --branch "$CUSTOM_BRANCH" "$REPO_URL" "$INSTALL_DIR" || error "克隆仓库失败，请检查 URL/分支 与网络连接。"
+        git clone --branch "$CUSTOM_BRANCH" "$REPO_URL" "$tmp_dir" || error "克隆仓库失败，请检查 URL/分支 与网络连接。"
     else
-        git clone "$REPO_URL" "$INSTALL_DIR" || error "克隆仓库失败，请检查 URL 和网络连接。"
+        git clone "$REPO_URL" "$tmp_dir" || error "克隆仓库失败，请检查 URL 和网络连接。"
     fi
+
     # 确保脚本内的文件也存在
-    if [ ! -f "$INSTALL_DIR/$SERVICE_FILE" ]; then
+    if [ ! -f "$tmp_dir/$SERVICE_FILE" ]; then
+        rm -rf "$tmp_dir"
         error "在下载的项目中未找到 $SERVICE_FILE 文件。"
     fi
+
+    mkdir -p "$INSTALL_DIR"
+
+    if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/config.toml" ]; then
+        info "检测到已安装实例，保留配置文件，仅更新程序文件。"
+        rsync -a --delete \
+            --exclude "config.toml" \
+            "$tmp_dir/" "$INSTALL_DIR/" || error "同步更新失败。"
+    else
+        info "首次安装，写入目录 $INSTALL_DIR。"
+        rsync -a "$tmp_dir/" "$INSTALL_DIR/" || error "同步写入失败。"
+    fi
+
+    rm -rf "$tmp_dir"
 }
 
 # 清理旧的 nftables 表和规则
