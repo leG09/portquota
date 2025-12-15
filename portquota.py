@@ -23,6 +23,8 @@ TABLE = "traffic"
 INGRESS = "ingress"
 EGRESS = "egress"
 FORWARD = "forward"
+PREROUTING = "prerouting"  # 用于在 DNAT 之前捕获流量（Docker 端口映射）
+POSTROUTING = "postrouting"  # 用于在 SNAT 之后捕获流量
 
 def run(cmd, input_text=None):
     return subprocess.run(cmd, input=input_text, text=True, capture_output=True)
@@ -52,10 +54,12 @@ def sync_rules(cfg: dict):
     ensure_infra()
 
     # 清空我们自己的链（不影响计数器）
-    logger.info("清空 ingress、egress 和 forward 链")
+    logger.info("清空所有链")
     nft_f(f"flush chain {FAMILY} {TABLE} {INGRESS}")
     nft_f(f"flush chain {FAMILY} {TABLE} {EGRESS}")
     nft_f(f"flush chain {FAMILY} {TABLE} {FORWARD}")
+    nft_f(f"flush chain {FAMILY} {TABLE} {PREROUTING}")
+    nft_f(f"flush chain {FAMILY} {TABLE} {POSTROUTING}")
 
     def add_one(direction, proto, port, counter_name):
         # 给规则加上 comment，便于诊断
@@ -75,13 +79,19 @@ def sync_rules(cfg: dict):
         ensure_counter(cname)
         logger.info(f"为端口 {port} (方向: {direction}) 创建规则")
 
-        # 对于 both 方向，需要监控 input、output 和 forward（用于 Docker 网络）
+        # 对于 both 方向，需要监控多个 hook：
+        # - prerouting: 在 DNAT 之前捕获（Docker 端口映射的关键）
+        # - input: 本地流量
+        # - forward: 转发流量
+        # - output: 本地发出的流量
+        # - postrouting: 在 SNAT 之后捕获
         if direction == "both":
-            dirs = [INGRESS, EGRESS, FORWARD]
+            # 使用 prerouting 和 postrouting 来捕获所有流量（包括 Docker 端口映射）
+            dirs = [PREROUTING, POSTROUTING]
         elif direction == "ingress":
-            dirs = [INGRESS, FORWARD]  # ingress 也需要 forward（Docker 转发）
+            dirs = [PREROUTING]  # 入口流量在 prerouting 中捕获（DNAT 之前）
         elif direction == "egress":
-            dirs = [EGRESS, FORWARD]  # egress 也需要 forward（Docker 转发）
+            dirs = [POSTROUTING]  # 出口流量在 postrouting 中捕获（SNAT 之后）
         else:
             dirs = [direction]
         
@@ -124,41 +134,56 @@ def ensure_infra():
     
     if forward_exists:
         logger.info("删除现有的 forward 链以更新优先级")
-        # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
         nft_f(f"delete chain {FAMILY} {TABLE} {FORWARD}")
-    logger.info("创建 forward 链 (priority -150) - 用于监控 Docker 网络流量")
+    logger.info("创建 forward 链 (priority -150)")
     nft_f(f"add chain {FAMILY} {TABLE} {FORWARD} {{ type filter hook forward priority -150; policy accept; }}")
+    
+    prerouting_exists = run(["nft","list","chain",FAMILY,TABLE,PREROUTING]).returncode == 0
+    if prerouting_exists:
+        logger.info("删除现有的 prerouting 链以更新优先级")
+        nft_f(f"delete chain {FAMILY} {TABLE} {PREROUTING}")
+    logger.info("创建 prerouting 链 (priority -150) - 用于在 DNAT 之前捕获 Docker 端口映射流量")
+    nft_f(f"add chain {FAMILY} {TABLE} {PREROUTING} {{ type filter hook prerouting priority -150; policy accept; }}")
+    
+    postrouting_exists = run(["nft","list","chain",FAMILY,TABLE,POSTROUTING]).returncode == 0
+    if postrouting_exists:
+        logger.info("删除现有的 postrouting 链以更新优先级")
+        nft_f(f"delete chain {FAMILY} {TABLE} {POSTROUTING}")
+    logger.info("创建 postrouting 链 (priority -150) - 用于在 SNAT 之后捕获流量")
+    nft_f(f"add chain {FAMILY} {TABLE} {POSTROUTING} {{ type filter hook postrouting priority -150; policy accept; }}")
 
 def ensure_counter(counter_name):
     if run(["nft","list","counter",FAMILY,TABLE,counter_name]).returncode != 0:
         nft_f(f"add counter {FAMILY} {TABLE} {counter_name}")
 
 def rule_line(exclude_ifaces, proto, direction, port, counter_name):
-    # direction: "ingress" uses dport, "egress" uses sport, "forward" uses dport
-    # 对于 Docker 端口映射：
-    # - input hook: 在 DNAT 之前，目标端口是映射的外部端口（如 19845），应该能捕获
-    # - forward hook: 在 DNAT 之后，目标端口可能已改变为容器端口（如 443），难以匹配
-    # 所以主要依赖 input hook 来捕获 Docker 端口映射的流量
+    # 对于 Docker 端口映射，关键是在 DNAT 之前捕获流量
+    # - prerouting hook: 在 DNAT 之前，目标端口是映射的外部端口（如 19845），这是关键！
+    # - postrouting hook: 在 SNAT 之后，可以捕获出口流量
+    # - input/output/forward hooks: 在 DNAT/SNAT 之后，端口可能已改变
+    
     iface = ""
     if exclude_ifaces:
         names = ", ".join(f'"{i}"' for i in exclude_ifaces)
-        if direction == INGRESS:
-            # input hook：只排除回环接口，不排除 docker0
-            # 因为 Docker 端口映射的流量从外部接口进入，不经过 docker0
-            # 但我们需要排除 "lo" 以避免统计本地回环流量
-            # 注意：docker0 的排除可能不必要，因为外部流量不经过它
+        if direction == PREROUTING:
+            # prerouting hook：排除回环接口，但保留 docker0（因为外部流量不经过它）
+            # 外部流量从 ens3 进入，在 DNAT 之前目标端口是 19845
+            iface = f"iifname != {{ \"lo\" }} "
+        elif direction == POSTROUTING:
+            # postrouting hook：排除回环接口
+            iface = f"oifname != {{ \"lo\" }} "
+        elif direction == INGRESS:
             iface = f"iifname != {{ {names} }} "
         elif direction == EGRESS:
-            # output hook：排除回环接口
             iface = f"oifname != {{ {names} }} "
         elif direction == FORWARD:
-            # forward hook：对于 Docker 端口映射，forward hook 中端口已改变
-            # 但保留规则以防万一，只排除回环接口
-            # 注意：不排除 docker0，因为转发流量可能经过它
             iface = f"iifname != {{ \"lo\" }} oifname != {{ \"lo\" }} "
     
     # 端口匹配
-    if direction == INGRESS or direction == FORWARD:
+    # prerouting/postrouting 使用 dport（目标端口）
+    # 对于 prerouting，在 DNAT 之前，目标端口是外部映射端口（如 19845）
+    # 对于 postrouting，在 SNAT 之后，源端口可能已改变，但目标端口仍然可用
+    if direction in (INGRESS, FORWARD, PREROUTING, POSTROUTING):
         port_expr = f"{proto} dport {port}"
     else:  # EGRESS
         port_expr = f"{proto} sport {port}"
