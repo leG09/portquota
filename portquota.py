@@ -1,11 +1,22 @@
 #!/usr/bin/python3
 import os, sys, time, subprocess, json, argparse, re, datetime
 import curses
+import logging
 try:
     import tomllib  # py3.11+
 except Exception as e:
     print("Python 3.11+ with tomllib is required.", file=sys.stderr)
     sys.exit(1)
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stderr)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 FAMILY = "inet"
 TABLE = "traffic"
@@ -18,9 +29,11 @@ def run(cmd, input_text=None):
 def nft_f(rules_text):
     res = run(["nft","-f","-"], input_text=rules_text)
     if res.returncode != 0:
-        print(f"nft 命令失败: {rules_text[:100]}", file=sys.stderr)
-        print(f"错误输出: {res.stderr}", file=sys.stderr)
+        logger.error(f"nft 命令失败: {rules_text[:100]}")
+        logger.error(f"错误输出: {res.stderr}")
         # 不抛出异常，但记录错误
+    else:
+        logger.debug(f"nft 命令成功: {rules_text[:100]}")
     return res
 
 def sync_rules(cfg: dict):
@@ -32,10 +45,13 @@ def sync_rules(cfg: dict):
     exclude_ifaces = g.get("exclude_ifaces", ["lo", "docker0"])
     protocols = g.get("protocols", ["tcp", "udp"])
 
+    logger.info(f"开始同步规则，排除接口: {exclude_ifaces}, 协议: {protocols}")
+    
     # 确保表/链存在
     ensure_infra()
 
     # 清空我们自己的链（不影响计数器）
+    logger.info("清空 ingress 和 egress 链")
     nft_f(f"flush chain {FAMILY} {TABLE} {INGRESS}")
     nft_f(f"flush chain {FAMILY} {TABLE} {EGRESS}")
 
@@ -43,40 +59,55 @@ def sync_rules(cfg: dict):
         # 给规则加上 comment，便于诊断
         line = rule_line(exclude_ifaces, proto, direction, port, counter_name) + \
                f' comment "pq:{port}:{direction}:{proto}"'
+        logger.debug(f"添加规则: {line}")
         nft_f(line)
 
     # 逐端口下发
-    for p in cfg.get("ports", []):
+    ports = cfg.get("ports", [])
+    logger.info(f"配置了 {len(ports)} 个端口")
+    for p in ports:
         port = int(p["port"])
         direction = p.get("direction", "both")
         protocols_here = protocols
         cname = f"port{port}_total"
         ensure_counter(cname)
+        logger.info(f"为端口 {port} (方向: {direction}) 创建规则")
 
         dirs = [INGRESS, EGRESS] if direction == "both" else [direction]
         for d in dirs:
             for proto in protocols_here:
                 add_one(d, proto, port, cname)
+    
+    logger.info("规则同步完成")
 
 
 def ensure_infra():
+    logger.info("确保 nftables 基础设施存在")
     if run(["nft","list","table",FAMILY,TABLE]).returncode != 0:
+        logger.info(f"创建表 {FAMILY} {TABLE}")
         nft_f(f"add table {FAMILY} {TABLE}")
-    # 使用优先级 -50，在 UFW 之后（UFW 通常使用 -50 或更高）
-    # 这样可以确保流量已经被 UFW 处理过，但仍然能被计数
+    else:
+        logger.debug(f"表 {FAMILY} {TABLE} 已存在")
+    
+    # 使用优先级 0，在大多数规则之后但在最终决策之前
+    # 这样可以确保流量已经被其他规则（如 UFW）处理过，但仍然能被计数
     # 如果链已存在但优先级不同，需要删除并重新创建
     ingress_exists = run(["nft","list","chain",FAMILY,TABLE,INGRESS]).returncode == 0
     egress_exists = run(["nft","list","chain",FAMILY,TABLE,EGRESS]).returncode == 0
     
     if ingress_exists:
+        logger.info("删除现有的 ingress 链以更新优先级")
         # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
         nft_f(f"delete chain {FAMILY} {TABLE} {INGRESS}")
-    nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority -50; policy accept; }}")
+    logger.info("创建 ingress 链 (priority 0)")
+    nft_f(f"add chain {FAMILY} {TABLE} {INGRESS} {{ type filter hook input priority 0; policy accept; }}")
     
     if egress_exists:
+        logger.info("删除现有的 egress 链以更新优先级")
         # 删除旧链（如果存在）以更新优先级，sync_rules 会重新添加规则
         nft_f(f"delete chain {FAMILY} {TABLE} {EGRESS}")
-    nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority -50; policy accept; }}")
+    logger.info("创建 egress 链 (priority 0)")
+    nft_f(f"add chain {FAMILY} {TABLE} {EGRESS} {{ type filter hook output priority 0; policy accept; }}")
 
 def ensure_counter(counter_name):
     if run(["nft","list","counter",FAMILY,TABLE,counter_name]).returncode != 0:
@@ -610,7 +641,25 @@ def run_tui(config_path: str):
 
     curses.wrapper(run_loop)
 
+def check_ufw_backend():
+    """检查 UFW 使用的后端"""
+    res = run(["ufw", "status", "verbose"])
+    if res.returncode == 0:
+        output = res.stdout.lower()
+        if "iptables" in output and "nftables" not in output:
+            logger.warning("UFW 可能使用 iptables 后端，这可能与 nftables 冲突")
+            logger.warning("建议切换到 nftables 后端: ufw --force enable")
+        elif "nftables" in output:
+            logger.info("UFW 使用 nftables 后端")
+        else:
+            logger.info("无法确定 UFW 后端类型")
+    else:
+        logger.warning("无法检查 UFW 状态")
+
 def loop(cfg:dict):
+    logger.info("启动守护进程循环")
+    check_ufw_backend()
+    
     g = cfg.get("general",{})
     unit = (g.get("unit","GB")).upper()
     unit_size = 1_000_000_000 if unit=="GB" else 1_073_741_824
@@ -619,27 +668,46 @@ def loop(cfg:dict):
     usage_file = g.get("usage_file","/root/portquota/usage.json")
     interval = int(g.get("interval_sec",5))
 
+    logger.info(f"配置: 单位={unit}, 间隔={interval}秒, 排除接口={exclude_ifaces}")
+
     ensure_infra()
     sync_rules(cfg)
-
+    
+    # 验证规则是否正确创建
+    res = run(["nft", "list", "table", FAMILY, TABLE])
+    if res.returncode == 0:
+        logger.info("nftables 表验证成功")
+        logger.debug(f"表内容:\n{res.stdout}")
+    else:
+        logger.error("无法列出 nftables 表")
 
     # 预创建每个端口的计数器与规则
     items = []
-    for p in cfg.get("ports",[]):
+    ports = cfg.get("ports", [])
+    if not ports:
+        logger.warning("配置中没有端口，退出")
+        return
+    
+    logger.info(f"监控 {len(ports)} 个端口")
+    for p in ports:
         port = int(p["port"])
         limit_gb = float(p["limit_gb"])
         direction = p.get("direction","both")  # both/ingress/egress
         cname = f"port{port}_total"
         ensure_counter(cname)
         items.append((port, limit_gb, direction, cname))
+        logger.info(f"监控端口 {port}: 限额 {limit_gb} {unit}, 方向 {direction}")
 
+    loop_count = 0
     while True:
+        loop_count += 1
         out = {"timestamp": now_iso(), "unit": unit, "ports": {}}
         for (port, limit_gb, direction, cname) in items:
             used_bytes = nft_counter_bytes(cname)
             limit_bytes = int(limit_gb * unit_size)
             exceeded = used_bytes >= limit_bytes
             if exceeded:
+                logger.warning(f"端口 {port} 超出限额: {used_bytes} >= {limit_bytes}")
                 block_port_tcp_by_removing_allow(port) # 按需求只关 tcp
             out["ports"][str(port)] = {
                 "bytes": used_bytes,
@@ -648,6 +716,9 @@ def loop(cfg:dict):
                 "direction": direction,
                 "status": "blocked" if exceeded else "open",
             }
+            # 每 12 次循环（约 1 分钟）记录一次统计信息
+            if loop_count % 12 == 0:
+                logger.info(f"端口 {port}: 已用 {round(used_bytes/unit_size, 4)} {unit} / {limit_gb} {unit}")
         write_json_atomic(usage_file, out)
         time.sleep(interval)
 
