@@ -198,11 +198,14 @@ sync_with_preserve_config() {
         cp "$dst_dir/config.toml" "$config_backup"
     fi
 
-    if command -v rsync >/dev/null 2>&1; then
+    local rsync_bin=""
+    rsync_bin="$(command -v rsync 2>/dev/null || true)"
+
+    if [ -n "$rsync_bin" ]; then
         if [ "$preserve_config" = "true" ]; then
-            rsync -a --delete --exclude "config.toml" "$src_dir" "$dst_dir/" || error "同步更新失败。"
+            "$rsync_bin" -a --delete --exclude "config.toml" "$src_dir"/. "$dst_dir/" || error "同步更新失败。"
         else
-            rsync -a "$src_dir" "$dst_dir/" || error "同步写入失败。"
+            "$rsync_bin" -a "$src_dir"/. "$dst_dir/" || error "同步写入失败。"
         fi
     else
         warn "rsync 未安装，使用回退拷贝方式（不执行 --delete）。"
@@ -213,7 +216,7 @@ sync_with_preserve_config() {
             rm -rf "$dst_dir"
             mkdir -p "$dst_dir"
         fi
-        cp -a "$src_dir" "$dst_dir/" || error "回退拷贝失败。"
+        cp -a "$src_dir"/. "$dst_dir/" || error "回退拷贝失败。"
     fi
 
     if [ "$has_config" = true ] && [ -n "$config_backup" ] && [ -f "$config_backup" ]; then
@@ -243,10 +246,10 @@ download_project() {
 
     if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/config.toml" ]; then
         info "检测到已安装实例，保留配置文件，仅更新程序文件。"
-        sync_with_preserve_config "$tmp_dir/" "$INSTALL_DIR" "true"
+        sync_with_preserve_config "$tmp_dir" "$INSTALL_DIR" "true"
     else
         info "首次安装，写入目录 $INSTALL_DIR。"
-        sync_with_preserve_config "$tmp_dir/" "$INSTALL_DIR" "false"
+        sync_with_preserve_config "$tmp_dir" "$INSTALL_DIR" "false"
     fi
 
     rm -rf "$tmp_dir"
