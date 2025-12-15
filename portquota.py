@@ -16,7 +16,11 @@ def run(cmd, input_text=None):
     return subprocess.run(cmd, input=input_text, text=True, capture_output=True)
 
 def nft_f(rules_text):
-    return run(["nft","-f","-"], input_text=rules_text)
+    res = run(["nft","-f","-"], input_text=rules_text)
+    if res.returncode != 0:
+        print(f"nft 命令失败: {rules_text[:100]}", file=sys.stderr)
+        print(f"错误输出: {res.stderr}", file=sys.stderr)
+    return res
 
 def sync_rules(cfg: dict):
     """
@@ -357,7 +361,7 @@ def run_tui(config_path: str):
     def draw(stdscr, rows):
         stdscr.clear()
         h, w = stdscr.getmaxyx()
-        title = "PortQuota 交互界面  ↑/↓ 选择  Enter 重置  A 添加  D 删除  E 编辑  Space 刷新  S 保存  R 重启服务  W 监听  Q 退出"
+        title = "PortQuota 交互界面  ↑/↓ 选择  Enter 重置  A 添加  D 删除  E 编辑  Space 刷新  S 保存  F 同步规则  R 重启服务  W 监听  Q 退出"
         try:
             curses.start_color(); curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_CYAN, -1)    # header/title
@@ -547,7 +551,16 @@ def run_tui(config_path: str):
                         ensure_counter(cname)
                         items.append((nport, nlim, sdir, cname))
                         state["selected"] = len(items)-1
-                        state["message"] = f"已添加端口 {nport}"
+                        # 立即同步规则，让新端口能开始计数
+                        try:
+                            temp_cfg = {"general": general, "ports": []}
+                            for (p, lim, dr, _cn) in items:
+                                temp_cfg["ports"].append({"port": p, "limit_gb": lim, "direction": dr})
+                            ensure_infra()
+                            sync_rules(temp_cfg)
+                            state["message"] = f"已添加端口 {nport} 并同步规则"
+                        except Exception:
+                            state["message"] = f"已添加端口 {nport}（规则同步失败，请按 F 重试）"
                     except Exception:
                         state["message"] = "输入无效，未添加"
             elif ch in (ord('d'), ord('D')):
@@ -560,6 +573,18 @@ def run_tui(config_path: str):
             elif ch in (ord('s'), ord('S')):
                 save_config()
                 state["message"] = "配置已保存。若要使守护进程生效，请运行: systemctl restart portquota"
+            elif ch in (ord('f'), ord('F')):
+                # 强制重新同步规则（基于当前 items，不依赖配置文件）
+                try:
+                    ensure_infra()
+                    # 构建临时配置用于同步
+                    temp_cfg = {"general": general, "ports": []}
+                    for (port, limit_gb, direction, _cname) in items:
+                        temp_cfg["ports"].append({"port": port, "limit_gb": limit_gb, "direction": direction})
+                    sync_rules(temp_cfg)
+                    state["message"] = f"已为 {len(items)} 个端口同步规则"
+                except Exception as e:
+                    state["message"] = f"同步规则失败: {str(e)[:50]}"
             elif ch in (ord('w'), ord('W')):
                 state["watch"] = not state["watch"]
                 state["message"] = "已开启 WATCH 自动刷新" if state["watch"] else "已关闭 WATCH 自动刷新"
