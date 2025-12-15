@@ -589,7 +589,7 @@ def run_tui(config_path: str):
                 state["watch"] = not state["watch"]
                 state["message"] = "已开启 WATCH 自动刷新" if state["watch"] else "已关闭 WATCH 自动刷新"
                 stdscr.timeout(1000 if state["watch"] else -1)
-            elif ch in (ord('R')):
+            elif ch == ord('R'):
                 ok, msg = restart_service()
                 state["message"] = "服务已重启" if ok else f"重启失败: {msg}"
 
